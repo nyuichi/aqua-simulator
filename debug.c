@@ -2,23 +2,19 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
-#include <termios.h>
 #include "debug.h"
 
 // env
 extern uint32_t reg[32];
 extern uint32_t *mem;
 extern uint32_t pc;
-uint32_t to_physical(uint32_t);
-uint32_t load(int ra, uint32_t disp);
 void print_env(int show_vpc);
 
 // Disable debugging feature if simulation speed is needed. Default: 0
 extern int debug_enabled;
 
 // defined in sim.c
-void init_term();
-void restore_term();
+void check_addr(uint32_t addr);
 void error(char*, ...);
 
 //for debug func
@@ -94,8 +90,10 @@ void do_interactive_loop()
       }
       if (argc < 2)
         count = 1;
-      for (i = 0; i < count; i++)
-        fprintf(stderr, "0x%08x: 0x%08x\n", addr + i * 4, load(0, (addr + i * 4) >> 2));
+      for (i = 0; i < count; i++) {
+        check_addr(addr + i * 4);
+        fprintf(stderr, "0x%08x: 0x%08x\n", addr + i * 4, mem[(addr + i * 4) >> 2]);
+      }
 
     } else if (strncmp("list", cmd, 4) == 0) {
       // print the next N instructions
@@ -107,7 +105,7 @@ void do_interactive_loop()
         count = 10;
       for (i = 0; i < count; i++) {
         fprintf(stderr, "0x%08x: ", pc + i * 4);
-        print_disasm(stderr, mem[to_physical(pc + i * 4) >> 2]);
+        print_disasm(stderr, mem[(pc + i * 4) >> 2]);
       }
 
     } else if (strncmp("disable", cmd, 7) == 0) {
@@ -147,24 +145,14 @@ void do_interactive_loop()
 
 void debug_hook()
 {
-  uint32_t phys_pc;
-
   if (reg[0] != 0)
     error("r0 is not zero");
 
-  phys_pc = to_physical(pc);
-  update_e_i(pc, mem[phys_pc >> 2]);
+  update_e_i(pc, mem[pc >> 2]);
   if (is_indebug) {
-    struct termios ttystate;
-
-    tcgetattr(fileno(stdin), &ttystate);
-    restore_term();
-
     fprintf(stderr, "0x%08x: ", pc);
-    print_disasm(stderr, mem[phys_pc >> 2]);
+    print_disasm(stderr, mem[pc >> 2]);
     do_interactive_loop();
-
-    tcsetattr(fileno(stdin), TCSANOW, &ttystate);
   }
 }
 
