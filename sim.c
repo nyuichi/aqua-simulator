@@ -10,7 +10,6 @@
 #include <termios.h>
 #include <unistd.h>
 #include "debug.h"
-#include "fpu.h"
 
 #define HALT_CODE   0xffffffff
 
@@ -34,7 +33,7 @@ long long inst_cnt;
 struct termios original_ttystate;
 
 char infile[128];
-int show_stat, boot_test, sim_intr_disabled, use_maswag_fpu;
+int show_stat, boot_test, sim_intr_disabled;
 
 uint32_t to_physical(uint32_t);
 void restore_term();
@@ -73,20 +72,6 @@ void error(char *fmt, ...)
     exit(1);
 }
 
-uint32_t bitint(float x)
-{
-    union { uint32_t i; float f; } u;
-    u.f = x;
-    return u.i;
-}
-
-float bitfloat(uint32_t x)
-{
-    union { uint32_t i; float f; } u;
-    u.i = x;
-    return u.f;
-}
-
 uint32_t alu(int tag, int ra, int rb, uint32_t lit)
 {
     uint32_t t = reg[rb] + lit;
@@ -106,59 +91,10 @@ uint32_t alu(int tag, int ra, int rb, uint32_t lit)
         case 25: return reg[ra] == t;
         case 26: return (int32_t)reg[ra] <  (int32_t)t;
         case 27: return (int32_t)reg[ra] <= (int32_t)t;
-        // case 28: return bitfloat(reg[ra]) != bitfloat(reg[rb]);
-        // case 29: return bitfloat(reg[ra]) == bitfloat(reg[rb]);
         case 30: return bitfloat(reg[ra]) <  bitfloat(reg[rb]);
         case 31: return bitfloat(reg[ra]) <= bitfloat(reg[rb]);
         default: error("instruction decode error (ALU)");
     }
-}
-
-uint32_t fpu(int tag, int ra, int rb)
-{
-    switch (tag) {
-        case 0:  return bitint(bitfloat(reg[ra]) + bitfloat(reg[rb]));
-        case 1:  return bitint(bitfloat(reg[ra]) - bitfloat(reg[rb]));
-        case 2:  return bitint(bitfloat(reg[ra]) * bitfloat(reg[rb]));
-        // case 3:  return bitint(bitfloat(reg[ra]) / bitfloat(reg[rb]));
-        case 4:  return bitint(1.0 / bitfloat(reg[ra]));
-        case 5:  return bitint(sqrtf(bitfloat(reg[ra])));
-        case 6:  return (int32_t)roundf(bitfloat(reg[ra]));
-        case 7:  return bitint((float)(int32_t)reg[ra]);
-        case 8:  return bitint(floorf(bitfloat(reg[ra])));
-        default: error("instruction decode error (FPU)");
-    }
-}
-
-uint32_t fpu_maswag(int tag, int ra, int rb)
-{
-    switch (tag) {
-        case 0:  return fadd(reg[ra], reg[rb]);
-        case 1:  return fsub(reg[ra], reg[rb]);
-        case 2:  return fmul(reg[ra], reg[rb]);
-        // case 3:  return fdiv(reg[ra], reg[rb]);
-        case 4:  return finv(reg[ra]);
-        case 5:  return fsqrt(reg[ra]);
-        case 6:  return h_f2i(reg[ra]);
-        case 7:  return h_i2f(reg[ra]);
-        case 8:  return h_floor(reg[ra]);
-        default: error("instruction decode error (FPU)");
-    }
-}
-
-uint32_t fpu_sign(uint32_t x, int mode)
-{
-    switch (mode) {
-        case 1:  return x ^ 0x80000000;
-        case 2:  return x & 0x7fffffff;
-        case 3:  return x | 0x80000000;
-        default: return x;
-    }
-}
-
-uint32_t care_minus_zero(uint32_t x)
-{
-    return x == 0x80000000 ? 0 : x;
 }
 
 // Warning: Error messages in "to_physical" MUST starts with "to_physical: " to prevent
@@ -274,17 +210,6 @@ void exec_alu(uint32_t inst)
     uint32_t lit = (inst >> 5) & 255;
     if (lit >= 128) lit -= 256;
     reg[rx] = alu(tag, ra, rb, lit);
-}
-
-void exec_fpu(uint32_t inst)
-{
-    int tag = inst & 31;
-    int rx = (inst >> 23) & 31;
-    int ra = (inst >> 18) & 31;
-    int rb = (inst >> 13) & 31;
-    int sign = (inst >> 5) & 3;
-    uint32_t res = use_maswag_fpu ? fpu_maswag(tag, ra, rb) : fpu(tag, ra, rb);
-    reg[rx] = care_minus_zero(fpu_sign(res, sign));
 }
 
 void exec_misc(uint32_t inst)
@@ -469,7 +394,6 @@ void print_help(char *prog)
     fprintf(stderr, "options:\n");
     fprintf(stderr, "  -boot-test        bootloader test mode\n");
     fprintf(stderr, "  -debug            enable debugging feature\n");
-    fprintf(stderr, "  -fpu-maswag       use MasWag's FPU\n");
     fprintf(stderr, "  -msize <integer>  change memory size (MB)\n");
     fprintf(stderr, "  -no-interrupt     disable interrupt feature\n");
     fprintf(stderr, "  -simple           same as -no-interrupt\n");
@@ -485,8 +409,6 @@ void parse_cmd(int argc, char *argv[])
             boot_test = 1;
         } else if (strcmp(argv[i], "-debug") == 0) {
             debug_enabled = 1;
-        } else if (strcmp(argv[i], "-fpu-maswag") == 0) {
-            use_maswag_fpu = 1;
         } else if (strcmp(argv[i], "-msize") == 0) {
             if (i == argc - 1) print_help(argv[0]);
             mem_size = atoi(argv[++i]) << 20;
